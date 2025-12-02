@@ -1,0 +1,516 @@
+#!/usr/bin/env bash
+
+################################################################################
+# Nginx Log Analyser
+#
+# Description: Analyzes Nginx access logs and provides detailed statistics
+#              about IPs, paths, status codes, and user agents.
+#
+# Usage: nginx-log-analyser [options] <log-file>
+#
+# Author: Aurora Ergodica
+# License: MIT
+# Version: 1.0.0
+################################################################################
+
+set -euo pipefail
+
+# Color codes
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly MAGENTA='\033[0;35m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+# Configuration
+readonly SCRIPT_VERSION="1.0.0"
+readonly DEFAULT_TOP_N=5
+
+# Global variables
+TOP_N=$DEFAULT_TOP_N
+VERBOSE=false
+METHOD="awk"  # Default method: awk, grep, sed
+SHOW_DATES=false
+
+################################################################################
+# Helper Functions
+################################################################################
+
+print_color() {
+    local color=$1
+    shift
+    echo -e "${color}$*${NC}"
+}
+
+error_exit() {
+    print_color "$RED" "ERROR: $*" >&2
+    exit 1
+}
+
+info() {
+    print_color "$CYAN" "$*"
+}
+
+success() {
+    print_color "$GREEN" "$*"
+}
+
+warn() {
+    print_color "$YELLOW" "$*"
+}
+
+verbose() {
+    if [[ "$VERBOSE" == true ]]; then
+        print_color "$BLUE" "[VERBOSE] $*"
+    fi
+}
+
+print_header() {
+    local text=$1
+    echo
+    print_color "$BOLD$MAGENTA" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_color "$BOLD$MAGENTA" "  $text"
+    print_color "$BOLD$MAGENTA" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+show_help() {
+    cat << EOF
+${GREEN}Nginx Log Analyser v${SCRIPT_VERSION}${NC}
+
+Analyzes Nginx access logs and provides detailed statistics.
+
+${CYAN}USAGE:${NC}
+    nginx-log-analyser [options] <log-file>
+
+${CYAN}ARGUMENTS:${NC}
+    <log-file>         Path to Nginx access log file
+
+${CYAN}OPTIONS:${NC}
+    -n, --top N        Show top N results (default: 5)
+    -m, --method TYPE  Analysis method: awk, grep, sed (default: awk)
+    -d, --dates        Show date range in the log
+    -v, --verbose      Enable verbose output
+    -h, --help         Display this help message
+    --version          Display version information
+
+${CYAN}ANALYSIS METHODS:${NC}
+    awk    - Fast and efficient (recommended)
+    grep   - Uses grep + sed + sort + uniq
+    sed    - Uses sed + sort + uniq
+
+${CYAN}EXAMPLES:${NC}
+    # Basic analysis
+    nginx-log-analyser access.log
+
+    # Show top 10 results
+    nginx-log-analyser --top 10 access.log
+
+    # Use grep method with date range
+    nginx-log-analyser --method grep --dates access.log
+
+    # Verbose output
+    nginx-log-analyser --verbose access.log
+
+${CYAN}OUTPUT:${NC}
+    - Top N IP addresses with most requests
+    - Top N most requested paths
+    - Top N response status codes
+    - Top N user agents
+
+EOF
+}
+
+show_version() {
+    echo "Nginx Log Analyser v${SCRIPT_VERSION}"
+    echo "Copyright (c) 2025 Aurora Ergodica"
+    echo "License: MIT"
+}
+
+################################################################################
+# Validation Functions
+################################################################################
+
+validate_log_file() {
+    local log_file=$1
+    
+    if [[ ! -f "$log_file" ]]; then
+        error_exit "Log file does not exist: $log_file"
+    fi
+    
+    if [[ ! -r "$log_file" ]]; then
+        error_exit "Log file is not readable: $log_file"
+    fi
+    
+    if [[ ! -s "$log_file" ]]; then
+        error_exit "Log file is empty: $log_file"
+    fi
+    
+    verbose "Log file validated: $log_file"
+}
+
+validate_method() {
+    local method=$1
+    
+    case $method in
+        awk|grep|sed)
+            verbose "Using method: $method"
+            ;;
+        *)
+            error_exit "Invalid method: $method (use: awk, grep, or sed)"
+            ;;
+    esac
+}
+
+################################################################################
+# Analysis Functions - AWK Method (Fastest)
+################################################################################
+
+analyze_top_ips_awk() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top IPs using awk..."
+    
+    awk '{print $1}' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-20s - %s requests\n", $2, $1}'
+}
+
+analyze_top_paths_awk() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top paths using awk..."
+    
+    awk '{print $7}' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-50s - %s requests\n", $2, $1}'
+}
+
+analyze_top_status_codes_awk() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top status codes using awk..."
+    
+    awk '{print $9}' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-10s - %s requests\n", $2, $1}'
+}
+
+analyze_top_user_agents_awk() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top user agents using awk..."
+    
+    awk -F'"' '{print $6}' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{$1=""; printf "%s - %s requests\n", substr($0,2), NR}' | \
+        awk -F' - ' '{count[NR]=$0} END {for(i=1;i<=NR;i++) print count[i]}' | \
+        sed 's/ - \([0-9]*\) requests$//; s/$//' | \
+        awk '{line=$0; getline count; printf "%-80s - %s requests\n", substr(line,1,80), count}'
+    
+    # Simpler but less formatted version:
+    awk -F'"' '{print $6}' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{count=$1; $1=""; printf "%-80s - %d requests\n", substr($0,2,80), count}'
+}
+
+################################################################################
+# Analysis Functions - GREP Method
+################################################################################
+
+analyze_top_ips_grep() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top IPs using grep..."
+    
+    grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-20s - %s requests\n", $2, $1}'
+}
+
+analyze_top_paths_grep() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top paths using grep..."
+    
+    grep -oP '(?<=\"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) )[^ ]*' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-50s - %s requests\n", $2, $1}'
+}
+
+analyze_top_status_codes_grep() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top status codes using grep..."
+    
+    grep -oE '" [0-9]{3} ' "$log_file" | \
+        tr -d ' "' | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-10s - %s requests\n", $2, $1}'
+}
+
+analyze_top_user_agents_grep() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top user agents using grep..."
+    
+    grep -oP '(?<=")[^"]*(?="$)' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{count=$1; $1=""; printf "%-80s - %d requests\n", substr($0,2,80), count}'
+}
+
+################################################################################
+# Analysis Functions - SED Method
+################################################################################
+
+analyze_top_ips_sed() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top IPs using sed..."
+    
+    sed -n 's/^\([0-9.]\+\).*/\1/p' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-20s - %s requests\n", $2, $1}'
+}
+
+analyze_top_paths_sed() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top paths using sed..."
+    
+    sed -n 's/.*"[A-Z]\+ \([^ ]\+\).*/\1/p' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-50s - %s requests\n", $2, $1}'
+}
+
+analyze_top_status_codes_sed() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top status codes using sed..."
+    
+    sed -n 's/.* \([0-9]\{3\}\) .*/\1/p' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{printf "%-10s - %s requests\n", $2, $1}'
+}
+
+analyze_top_user_agents_sed() {
+    local log_file=$1
+    local top_n=$2
+    
+    verbose "Analyzing top user agents using sed..."
+    
+    sed -n 's/.*"\([^"]*\)"$/\1/p' "$log_file" | \
+        sort | \
+        uniq -c | \
+        sort -rn | \
+        head -n "$top_n" | \
+        awk '{count=$1; $1=""; printf "%-80s - %d requests\n", substr($0,2,80), count}'
+}
+
+################################################################################
+# Additional Analysis Functions
+################################################################################
+
+analyze_date_range() {
+    local log_file=$1
+    
+    verbose "Analyzing date range..."
+    
+    local first_date last_date
+    first_date=$(head -n 1 "$log_file" | awk -F'[\[\]]' '{print $2}' | cut -d: -f1)
+    last_date=$(tail -n 1 "$log_file" | awk -F'[\[\]]' '{print $2}' | cut -d: -f1)
+    
+    echo "First entry: $first_date"
+    echo "Last entry:  $last_date"
+}
+
+get_total_requests() {
+    local log_file=$1
+    wc -l < "$log_file"
+}
+
+################################################################################
+# Main Analysis Function
+################################################################################
+
+analyze_log() {
+    local log_file=$1
+    local method=$2
+    local top_n=$3
+    
+    # Print banner
+    print_color "$BOLD$GREEN" "═══════════════════════════════════════════════════════"
+    print_color "$BOLD$GREEN" "           Nginx Log Analyser v${SCRIPT_VERSION}"
+    print_color "$BOLD$GREEN" "═══════════════════════════════════════════════════════"
+    echo
+    
+    info "Analyzing: $log_file"
+    info "Method: $method"
+    info "Showing top $top_n results"
+    
+    local total_requests
+    total_requests=$(get_total_requests "$log_file")
+    success "Total requests: $total_requests"
+    
+    # Show date range if requested
+    if [[ "$SHOW_DATES" == true ]]; then
+        echo
+        info "Date Range:"
+        analyze_date_range "$log_file"
+    fi
+    
+    # Top IPs
+    print_header "Top $top_n IP addresses with the most requests"
+    case $method in
+        awk)  analyze_top_ips_awk "$log_file" "$top_n" ;;
+        grep) analyze_top_ips_grep "$log_file" "$top_n" ;;
+        sed)  analyze_top_ips_sed "$log_file" "$top_n" ;;
+    esac
+    
+    # Top Paths
+    print_header "Top $top_n most requested paths"
+    case $method in
+        awk)  analyze_top_paths_awk "$log_file" "$top_n" ;;
+        grep) analyze_top_paths_grep "$log_file" "$top_n" ;;
+        sed)  analyze_top_paths_sed "$log_file" "$top_n" ;;
+    esac
+    
+    # Top Status Codes
+    print_header "Top $top_n response status codes"
+    case $method in
+        awk)  analyze_top_status_codes_awk "$log_file" "$top_n" ;;
+        grep) analyze_top_status_codes_grep "$log_file" "$top_n" ;;
+        sed)  analyze_top_status_codes_sed "$log_file" "$top_n" ;;
+    esac
+    
+    # Top User Agents
+    print_header "Top $top_n user agents"
+    case $method in
+        awk)  analyze_top_user_agents_awk "$log_file" "$top_n" ;;
+        grep) analyze_top_user_agents_grep "$log_file" "$top_n" ;;
+        sed)  analyze_top_user_agents_sed "$log_file" "$top_n" ;;
+    esac
+    
+    echo
+    print_color "$BOLD$GREEN" "═══════════════════════════════════════════════════════"
+    success "Analysis completed successfully!"
+    print_color "$BOLD$GREEN" "═══════════════════════════════════════════════════════"
+    echo
+}
+
+################################################################################
+# Main Function
+################################################################################
+
+main() {
+    local log_file=""
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --version)
+                show_version
+                exit 0
+                ;;
+            -n|--top)
+                TOP_N="$2"
+                if ! [[ "$TOP_N" =~ ^[0-9]+$ ]] || [[ $TOP_N -lt 1 ]]; then
+                    error_exit "Top N must be a positive integer"
+                fi
+                shift 2
+                ;;
+            -m|--method)
+                METHOD="$2"
+                validate_method "$METHOD"
+                shift 2
+                ;;
+            -d|--dates)
+                SHOW_DATES=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -*)
+                error_exit "Unknown option: $1\nUse --help for usage information"
+                ;;
+            *)
+                if [[ -z "$log_file" ]]; then
+                    log_file="$1"
+                    shift
+                else
+                    error_exit "Multiple log files specified\nUse --help for usage information"
+                fi
+                ;;
+        esac
+    done
+    
+    # Validate required arguments
+    if [[ -z "$log_file" ]]; then
+        error_exit "Log file not specified\nUse --help for usage information"
+    fi
+    
+    # Validate log file
+    validate_log_file "$log_file"
+    
+    # Perform analysis
+    analyze_log "$log_file" "$METHOD" "$TOP_N"
+}
+
+# Run main function
+main "$@"
